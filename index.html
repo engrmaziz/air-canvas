@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AIR CANVAS — Gesture Drawing</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Bebas+Neue&display=swap');
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    :root {
+      --bg:     #05070b;
+      --panel:  rgba(8,12,20,0.88);
+      --border: rgba(255,255,255,0.07);
+      --accent: #00F5FF;
+      --mono:   'Share Tech Mono', monospace;
+      --display:'Bebas Neue', sans-serif;
+    }
+    html, body { width:100%; height:100%; background:var(--bg); overflow:hidden; font-family:var(--mono); color:#fff; cursor:none; }
+
+    /* ── Canvas layer ── */
+    #draw-canvas {
+      position:fixed; inset:0; width:100%; height:100%;
+      z-index:1;
+    }
+    /* cursor canvas */
+    #cursor-canvas {
+      position:fixed; inset:0; width:100%; height:100%;
+      z-index:2; pointer-events:none;
+    }
+
+    /* ── Camera feed ── */
+    #cam-container {
+      position:fixed; bottom:24px; right:24px;
+      width:220px; height:165px;
+      border-radius:12px; overflow:hidden;
+      border:1px solid var(--border);
+      z-index:10;
+      box-shadow: 0 0 30px rgba(0,0,0,.6);
+      background:#000;
+    }
+    #video {
+      width:100%; height:100%;
+      object-fit:cover;
+      transform:scaleX(-1);
+      display:block;
+    }
+    #cam-overlay {
+      position:absolute; inset:0;
+      background:linear-gradient(135deg,rgba(0,245,255,.05),transparent);
+      pointer-events:none;
+    }
+    .cam-corner {
+      position:absolute; width:14px; height:14px;
+      border-color:var(--accent); border-style:solid; border-width:0;
+      opacity:.7;
+    }
+    .cc-tl { top:6px; left:6px;   border-top-width:1.5px; border-left-width:1.5px; }
+    .cc-tr { top:6px; right:6px;  border-top-width:1.5px; border-right-width:1.5px; }
+    .cc-bl { bottom:6px; left:6px;  border-bottom-width:1.5px; border-left-width:1.5px; }
+    .cc-br { bottom:6px; right:6px; border-bottom-width:1.5px; border-right-width:1.5px; }
+    .cam-label {
+      position:absolute; top:7px; left:50%; transform:translateX(-50%);
+      font-size:9px; letter-spacing:3px; color:var(--accent); opacity:.6;
+    }
+
+    /* ── Mode indicator (top center) ── */
+    #mode-display {
+      position:fixed; top:20px; left:50%; transform:translateX(-50%);
+      z-index:20; text-align:center;
+      animation:fadeIn .3s ease;
+    }
+    #mode-name {
+      font-family:var(--display);
+      font-size:42px;
+      letter-spacing:8px;
+      line-height:1;
+      transition: color .3s ease, text-shadow .3s ease;
+    }
+    #mode-sub {
+      font-size:10px; letter-spacing:4px;
+      color:rgba(255,255,255,.3); margin-top:2px;
+    }
+
+    /* ── Gesture guide (left panel) ── */
+    #gesture-panel {
+      position:fixed; left:20px; top:50%; transform:translateY(-50%);
+      z-index:20; width:190px;
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:18px 16px;
+      backdrop-filter:blur(12px);
+    }
+    .panel-title {
+      font-size:9px; letter-spacing:4px; color:rgba(255,255,255,.25);
+      margin-bottom:14px; text-transform:uppercase;
+    }
+    .gesture-row {
+      display:flex; align-items:center; gap:10px;
+      padding:7px 0; border-bottom:1px solid rgba(255,255,255,.04);
+      transition: opacity .3s;
+    }
+    .gesture-row:last-child { border-bottom:none; }
+    .gesture-row.active .g-emoji { filter:none; transform:scale(1.2); }
+    .gesture-row.active .g-label { color:#fff; }
+    .g-emoji {
+      font-size:18px; width:26px; text-align:center;
+      filter:grayscale(.6) brightness(.7);
+      transition:all .3s;
+    }
+    .g-info { flex:1; }
+    .g-label {
+      font-size:11px; letter-spacing:1px;
+      color:rgba(255,255,255,.45);
+      transition:color .3s;
+    }
+    .g-desc { font-size:9px; color:rgba(255,255,255,.2); margin-top:2px; letter-spacing:1px; }
+    .g-dot {
+      width:6px; height:6px; border-radius:50%;
+      background:rgba(255,255,255,.1);
+      transition:background .3s, box-shadow .3s;
+    }
+    .gesture-row.active .g-dot {
+      background:var(--mode-color, #00F5FF);
+      box-shadow:0 0 8px var(--mode-color, #00F5FF);
+    }
+
+    /* ── Color palette ── */
+    #palette {
+      position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+      z-index:20; display:flex; gap:10px; align-items:center;
+      background:var(--panel); border:1px solid var(--border);
+      border-radius:50px; padding:10px 18px;
+      backdrop-filter:blur(12px);
+    }
+    .swatch {
+      width:22px; height:22px; border-radius:50%;
+      border:2px solid transparent; cursor:pointer;
+      transition:transform .2s, border-color .2s;
+      position:relative;
+    }
+    .swatch.active {
+      transform:scale(1.3);
+      border-color:rgba(255,255,255,.6);
+    }
+    .swatch::after {
+      content:''; position:absolute; inset:-4px;
+      border-radius:50%; opacity:0;
+      transition:opacity .2s;
+    }
+    .swatch.active::after { opacity:.3; }
+
+    /* ── Brush size indicator ── */
+    #size-indicator {
+      position:fixed; right:260px; bottom:36px;
+      z-index:20; display:flex; flex-direction:column;
+      align-items:center; gap:6px;
+    }
+    #size-label { font-size:9px; letter-spacing:3px; color:rgba(255,255,255,.3); }
+    #size-preview {
+      border-radius:50%; background:#fff;
+      transition:width .2s, height .2s, box-shadow .2s;
+    }
+
+    /* ── Start overlay ── */
+    #start-overlay {
+      position:fixed; inset:0; z-index:100;
+      background:var(--bg);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:0;
+    }
+    #start-overlay.hidden { display:none; }
+    .so-tag { font-size:10px; letter-spacing:6px; color:var(--accent); margin-bottom:16px; opacity:.7; }
+    .so-title {
+      font-family:var(--display);
+      font-size:72px; letter-spacing:10px;
+      background:linear-gradient(135deg,#00F5FF,#FF00E5);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      margin-bottom:6px; line-height:1;
+    }
+    .so-subtitle { font-size:11px; letter-spacing:4px; color:rgba(255,255,255,.25); margin-bottom:48px; }
+    .so-gestures {
+      display:flex; gap:20px; margin-bottom:48px; flex-wrap:wrap; justify-content:center;
+    }
+    .so-g {
+      background:rgba(255,255,255,.03); border:1px solid var(--border);
+      border-radius:12px; padding:14px 18px; text-align:center; width:130px;
+    }
+    .so-g-emoji { font-size:28px; margin-bottom:8px; }
+    .so-g-name { font-size:11px; letter-spacing:2px; color:rgba(255,255,255,.6); margin-bottom:4px; }
+    .so-g-desc { font-size:9px; color:rgba(255,255,255,.25); letter-spacing:1px; }
+    #start-btn {
+      padding:15px 48px; background:var(--accent); color:#000;
+      border:none; border-radius:8px; font-family:var(--mono);
+      font-size:13px; letter-spacing:4px; font-weight:700;
+      cursor:pointer; text-transform:uppercase;
+      transition:filter .2s, transform .2s;
+    }
+    #start-btn:hover { filter:brightness(1.1); transform:scale(1.02); }
+    .so-note { font-size:9px; color:rgba(255,255,255,.15); letter-spacing:2px; margin-top:16px; }
+
+    /* ── Clear flash ── */
+    #clear-flash {
+      position:fixed; inset:0; z-index:50;
+      background:rgba(255,50,80,.08);
+      pointer-events:none; opacity:0;
+      transition:opacity .15s;
+    }
+    #clear-flash.show { opacity:1; }
+
+    /* ── Hold progress ring ── */
+    #hold-ring {
+      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      z-index:30; pointer-events:none; display:none;
+    }
+    #hold-ring svg { transform:rotate(-90deg); }
+    #hold-ring circle {
+      fill:none; stroke:rgba(255,50,80,.8);
+      stroke-width:4; stroke-dasharray:226;
+      stroke-dashoffset:226;
+      stroke-linecap:round;
+      transition:stroke-dashoffset .05s linear;
+    }
+    #hold-text {
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      font-size:10px; letter-spacing:3px; color:rgba(255,50,80,.9);
+    }
+
+    /* ── Stats strip ── */
+    #stats {
+      position:fixed; top:20px; right:20px; z-index:20;
+      display:flex; flex-direction:column; gap:6px; align-items:flex-end;
+    }
+    .stat { font-size:10px; letter-spacing:2px; color:rgba(255,255,255,.2); }
+    .stat span { color:rgba(255,255,255,.5); }
+
+    @keyframes fadeIn {
+      from { opacity:0; transform:translateX(-50%) translateY(-6px); }
+      to   { opacity:1; transform:translateX(-50%) translateY(0); }
+    }
+    @keyframes modeFlash {
+      0%   { opacity:0; transform:translateX(-50%) scale(.9); }
+      50%  { opacity:1; transform:translateX(-50%) scale(1.05); }
+      100% { opacity:1; transform:translateX(-50%) scale(1); }
+    }
+    @keyframes particleFade {
+      0%   { opacity:1; transform:translate(0,0) scale(1); }
+      100% { opacity:0; transform:translate(var(--tx),var(--ty)) scale(0); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Drawing canvas -->
+<canvas id="draw-canvas"></canvas>
+<!-- Cursor / fingertip canvas -->
+<canvas id="cursor-canvas"></canvas>
+
+<!-- Camera -->
+<div id="cam-container">
+  <video id="video" autoplay muted playsinline></video>
+  <div id="cam-overlay"></div>
+  <div class="cam-corner cc-tl"></div>
+  <div class="cam-corner cc-tr"></div>
+  <div class="cam-corner cc-bl"></div>
+  <div class="cam-corner cc-br"></div>
+  <div class="cam-label">LIVE</div>
+</div>
+
+<!-- Mode display -->
+<div id="mode-display">
+  <div id="mode-name">READY</div>
+  <div id="mode-sub">SHOW YOUR HAND TO BEGIN</div>
+</div>
+
+<!-- Gesture guide -->
+<div id="gesture-panel">
+  <div class="panel-title">◈ Gestures</div>
+  <div class="gesture-row" id="g-draw">
+    <span class="g-emoji">☝️</span>
+    <div class="g-info">
+      <div class="g-label">DRAW</div>
+      <div class="g-desc">Index finger only</div>
+    </div>
+    <div class="g-dot"></div>
+  </div>
+  <div class="gesture-row" id="g-erase">
+    <span class="g-emoji">✌️</span>
+    <div class="g-info">
+      <div class="g-label">ERASE</div>
+      <div class="g-desc">Index + Middle</div>
+    </div>
+    <div class="g-dot"></div>
+  </div>
+  <div class="gesture-row" id="g-color">
+    <span class="g-emoji">🤏</span>
+    <div class="g-info">
+      <div class="g-label">COLOR</div>
+      <div class="g-desc">Pinch thumb+index</div>
+    </div>
+    <div class="g-dot"></div>
+  </div>
+  <div class="gesture-row" id="g-size">
+    <span class="g-emoji">🖖</span>
+    <div class="g-info">
+      <div class="g-label">BRUSH SIZE</div>
+      <div class="g-desc">3 fingers + spread</div>
+    </div>
+    <div class="g-dot"></div>
+  </div>
+  <div class="gesture-row" id="g-clear">
+    <span class="g-emoji">🖐️</span>
+    <div class="g-info">
+      <div class="g-label">CLEAR</div>
+      <div class="g-desc">Open hand, hold 2s</div>
+    </div>
+    <div class="g-dot"></div>
+  </div>
+  <div class="gesture-row" id="g-lift">
+    <span class="g-emoji">✊</span>
+    <div class="g-info">
+      <div class="g-label">PEN LIFT</div>
+      <div class="g-desc">Fist = move freely</div>
+    </div>
+    <div class="g-dot"></div>
+  </div>
+</div>
+
+<!-- Color palette -->
+<div id="palette">
+  <div class="swatch active" style="background:#00F5FF"  data-color="#00F5FF"  data-glow="#00F5FF"></div>
+  <div class="swatch"        style="background:#FF00E5"  data-color="#FF00E5"  data-glow="#FF00E5"></div>
+  <div class="swatch"        style="background:#FFE600"  data-color="#FFE600"  data-glow="#FFE600"></div>
+  <div class="swatch"        style="background:#00FF88"  data-color="#00FF88"  data-glow="#00FF88"></div>
+  <div class="swatch"        style="background:#FF6B35"  data-color="#FF6B35"  data-glow="#FF6B35"></div>
+  <div class="swatch"        style="background:#BF5FFF"  data-color="#BF5FFF"  data-glow="#BF5FFF"></div>
+  <div class="swatch"        style="background:#ffffff"  data-color="#ffffff"  data-glow="#ffffff"></div>
+</div>
+
+<!-- Brush size indicator -->
+<div id="size-indicator">
+  <div id="size-preview" style="width:12px;height:12px;box-shadow:0 0 8px #00F5FF"></div>
+  <div id="size-label">SIZE</div>
+</div>
+
+<!-- Hold ring -->
+<div id="hold-ring">
+  <svg width="80" height="80" viewBox="0 0 80 80">
+    <circle cx="40" cy="40" r="36" id="hold-circle"/>
+  </svg>
+  <div id="hold-text">CLEAR</div>
+</div>
+
+<!-- Clear flash -->
+<div id="clear-flash"></div>
+
+<!-- Stats -->
+<div id="stats">
+  <div class="stat">FPS <span id="fps-val">—</span></div>
+  <div class="stat">STROKES <span id="stroke-val">0</span></div>
+</div>
+
+<!-- Start overlay -->
+<div id="start-overlay">
+  <div class="so-tag">Tech: MediaPipe Hands · WebRTC · Canvas API</div>
+  <div class="so-title">AIR CANVAS by Musharraf Aziz</div>
+  <div class="so-subtitle">DRAW IN THE AIR WITH YOUR BARE HANDS</div>
+  <div class="so-gestures">
+    <div class="so-g"><div class="so-g-emoji">☝️</div><div class="so-g-name">DRAW</div><div class="so-g-desc">Index finger only</div></div>
+    <div class="so-g"><div class="so-g-emoji">✌️</div><div class="so-g-name">ERASE</div><div class="so-g-desc">Index + middle</div></div>
+    <div class="so-g"><div class="so-g-emoji">🤏</div><div class="so-g-name">COLOR</div><div class="so-g-desc">Pinch to cycle</div></div>
+    <div class="so-g"><div class="so-g-emoji">🖖</div><div class="so-g-name">BRUSH SIZE</div><div class="so-g-desc">3 fingers + spread</div></div>
+    <div class="so-g"><div class="so-g-emoji">🖐️</div><div class="so-g-name">CLEAR ALL</div><div class="so-g-desc">Open hand, hold 2s</div></div>
+    <div class="so-g"><div class="so-g-emoji">✊</div><div class="so-g-name">PEN LIFT</div><div class="so-g-desc">Fist = move free</div></div>
+  </div>
+  <button id="start-btn" onclick="startApp()">▶ LAUNCH APP</button>
+  <div class="so-note">Requires camera permission</div>
+</div>
+
+<script>
+// ── Canvases ─────────────────────────────────────────────────────────────────
+const drawCanvas   = document.getElementById("draw-canvas");
+const cursorCanvas = document.getElementById("cursor-canvas");
+const dctx = drawCanvas.getContext("2d");
+const cctx = cursorCanvas.getContext("2d");
+
+function resizeCanvases() {
+  drawCanvas.width   = cursorCanvas.width  = window.innerWidth;
+  drawCanvas.height  = cursorCanvas.height = window.innerHeight;
+}
+resizeCanvases();
+window.addEventListener("resize", resizeCanvases);
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const COLORS = ["#00F5FF","#FF00E5","#FFE600","#00FF88","#FF6B35","#BF5FFF","#ffffff"];
+let colorIdx   = 0;
+let brushSize  = 8;
+let currentMode = "LIFT";
+let prevMode    = "";
+let drawing     = false;
+let lastX = 0, lastY = 0;
+let trailBuffer = [];
+let strokeCount = 0;
+let clearHoldStart = null;
+let pinchCooldown  = 0;
+let lastColorChange = 0;
+
+// FPS
+let lastFrameTime = 0, frameCount = 0, fps = 0;
+
+// ── Gesture detection ─────────────────────────────────────────────────────────
+function fingerUp(lm, tip, pip) { return lm[tip].y < lm[pip].y; }
+
+function pinchDist(lm) {
+  const dx = lm[4].x - lm[8].x;
+  const dy = lm[4].y - lm[8].y;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+
+function fingerSpread3(lm) {
+  // distance between index tip and ring tip when 3 fingers up
+  const dx = lm[8].x - lm[16].x;
+  const dy = lm[8].y - lm[16].y;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+
+function getGesture(lm) {
+  const idx  = fingerUp(lm, 8,  6);
+  const mid  = fingerUp(lm, 12, 10);
+  const ring = fingerUp(lm, 16, 14);
+  const pink = fingerUp(lm, 20, 18);
+  const pd   = pinchDist(lm);
+
+  if (pd < 0.055)                          return "COLOR";
+  if (idx && !mid && !ring && !pink)       return "DRAW";
+  if (idx &&  mid && !ring && !pink)       return "ERASE";
+  if (idx &&  mid &&  ring && !pink)       return "SIZE";
+  if (idx &&  mid &&  ring &&  pink)       return "CLEAR";
+  return "LIFT";
+}
+
+// ── Mode config ───────────────────────────────────────────────────────────────
+const MODE_CONFIG = {
+  DRAW:  { color:"#00F5FF", label:"DRAW",  sub:"INDEX FINGER → DRAW",         g:"g-draw"  },
+  ERASE: { color:"#FF4D6A", label:"ERASE", sub:"ERASING — MOVE OVER STROKES", g:"g-erase" },
+  COLOR: { color:"#FFE600", label:"COLOR", sub:"PINCH → CYCLING COLORS",      g:"g-color" },
+  SIZE:  { color:"#00FF88", label:"SIZE",  sub:"SPREAD FINGERS TO RESIZE",    g:"g-size"  },
+  CLEAR: { color:"#FF4D6A", label:"CLEAR", sub:"HOLD OPEN HAND TO CLEAR...",  g:"g-clear" },
+  LIFT:  { color:"rgba(255,255,255,.3)", label:"LIFT", sub:"FIST — PEN LIFTED", g:"g-lift" },
+  READY: { color:"rgba(255,255,255,.2)", label:"READY", sub:"SHOW YOUR HAND TO BEGIN", g:null },
+};
+
+// ── UI Updates ────────────────────────────────────────────────────────────────
+const modeName    = document.getElementById("mode-name");
+const modeSub     = document.getElementById("mode-sub");
+const holdRing    = document.getElementById("hold-ring");
+const holdCircle  = document.getElementById("hold-circle");
+const clearFlash  = document.getElementById("clear-flash");
+const sizePreview = document.getElementById("size-preview");
+const fpsVal      = document.getElementById("fps-val");
+const strokeVal   = document.getElementById("stroke-val");
+
+function updateModeUI(mode) {
+  if (mode === prevMode) return;
+  prevMode = mode;
+  const cfg = MODE_CONFIG[mode] || MODE_CONFIG.LIFT;
+
+  modeName.textContent = cfg.label;
+  modeName.style.color = cfg.color;
+  modeName.style.textShadow = `0 0 40px ${cfg.color}60`;
+  modeSub.textContent  = cfg.sub;
+
+  // Gesture panel highlights
+  document.querySelectorAll(".gesture-row").forEach(r => {
+    r.classList.remove("active");
+    r.style.removeProperty("--mode-color");
+  });
+  if (cfg.g) {
+    const row = document.getElementById(cfg.g);
+    if (row) {
+      row.classList.add("active");
+      row.style.setProperty("--mode-color", cfg.color);
+    }
+  }
+
+  // Mode flash animation
+  modeName.style.animation = "none";
+  void modeName.offsetWidth;
+  modeName.style.animation = "modeFlash .4s ease";
+}
+
+function updateSwatches() {
+  document.querySelectorAll(".swatch").forEach((s,i) => {
+    s.classList.toggle("active", i === colorIdx);
+  });
+  updateSizePreview();
+}
+
+function updateSizePreview() {
+  const c = COLORS[colorIdx];
+  sizePreview.style.width  = brushSize + "px";
+  sizePreview.style.height = brushSize + "px";
+  sizePreview.style.background = c;
+  sizePreview.style.boxShadow  = `0 0 ${brushSize}px ${c}`;
+}
+
+// ── Drawing ───────────────────────────────────────────────────────────────────
+function addToTrail(x, y) {
+  trailBuffer.push({x, y});
+  if (trailBuffer.length > 4) trailBuffer.shift();
+}
+
+function smoothPoint(buf) {
+  if (buf.length < 2) return buf[0];
+  const n = buf.length;
+  return { x: buf.reduce((s,p)=>s+p.x,0)/n, y: buf.reduce((s,p)=>s+p.y,0)/n };
+}
+
+function drawStroke(x, y) {
+  addToTrail(x, y);
+  const sp = smoothPoint(trailBuffer);
+
+  dctx.globalCompositeOperation = "source-over";
+  dctx.lineCap   = "round";
+  dctx.lineJoin  = "round";
+
+  const c = COLORS[colorIdx];
+  dctx.strokeStyle   = c;
+  dctx.lineWidth     = brushSize;
+  dctx.shadowColor   = c;
+  dctx.shadowBlur    = brushSize * 2.5;
+
+  if (!drawing) {
+    dctx.beginPath();
+    dctx.moveTo(sp.x, sp.y);
+    drawing = true;
+    strokeCount++;
+    strokeVal.textContent = strokeCount;
+  } else {
+    dctx.beginPath();
+    dctx.moveTo(lastX, lastY);
+    dctx.lineTo(sp.x, sp.y);
+    dctx.stroke();
+  }
+
+  lastX = sp.x;
+  lastY = sp.y;
+}
+
+function eraseAt(x, y) {
+  dctx.globalCompositeOperation = "destination-out";
+  dctx.beginPath();
+  dctx.arc(x, y, brushSize * 3, 0, Math.PI * 2);
+  dctx.fillStyle = "rgba(0,0,0,1)";
+  dctx.fill();
+  dctx.globalCompositeOperation = "source-over";
+}
+
+function clearCanvas() {
+  dctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  clearFlash.classList.add("show");
+  setTimeout(() => clearFlash.classList.remove("show"), 200);
+  strokeCount = 0;
+  strokeVal.textContent = "0";
+}
+
+// ── Cursor rendering ──────────────────────────────────────────────────────────
+function drawCursor(x, y, mode) {
+  cctx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+  const c = mode === "ERASE" ? "#FF4D6A" : (COLORS[colorIdx]);
+  const r = mode === "ERASE" ? brushSize * 3 : brushSize / 2;
+
+  // Outer ring
+  cctx.beginPath();
+  cctx.arc(x, y, r + 8, 0, Math.PI * 2);
+  cctx.strokeStyle = c + "60";
+  cctx.lineWidth = 1;
+  cctx.stroke();
+
+  // Inner dot
+  cctx.beginPath();
+  cctx.arc(x, y, 3, 0, Math.PI * 2);
+  cctx.fillStyle = c;
+  cctx.shadowColor = c;
+  cctx.shadowBlur  = 12;
+  cctx.fill();
+
+  // Cross hair lines
+  cctx.shadowBlur = 0;
+  cctx.strokeStyle = c + "40";
+  cctx.lineWidth = 1;
+  [[x-r-14,y,x-r-4,y],[x+r+4,y,x+r+14,y],[x,y-r-14,x,y-r-4],[x,y+r+4,x,y+r+14]].forEach(([x1,y1,x2,y2])=>{
+    cctx.beginPath(); cctx.moveTo(x1,y1); cctx.lineTo(x2,y2); cctx.stroke();
+  });
+}
+
+// ── Hold ring for CLEAR ───────────────────────────────────────────────────────
+function updateHoldRing(progress) {
+  if (progress <= 0) {
+    holdRing.style.display = "none";
+    return;
+  }
+  holdRing.style.display = "block";
+  const offset = 226 - (226 * progress);
+  holdCircle.style.strokeDashoffset = offset;
+}
+
+// ── Hand processing ───────────────────────────────────────────────────────────
+function onResults(results) {
+  // FPS
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFrameTime >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    lastFrameTime = now;
+    fpsVal.textContent = fps;
+  }
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    updateModeUI("READY");
+    drawing = false;
+    trailBuffer = [];
+    clearHoldStart = null;
+    updateHoldRing(0);
+    cctx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+    return;
+  }
+
+  const lm      = results.multiHandLandmarks[0];
+  const gesture = getGesture(lm);
+
+  // Flip x (mirror)
+  const rawX = (1 - lm[8].x) * drawCanvas.width;
+  const rawY = lm[8].y * drawCanvas.height;
+
+  updateModeUI(gesture);
+
+  // ── DRAW ──
+  if (gesture === "DRAW") {
+    drawStroke(rawX, rawY);
+    drawCursor(rawX, rawY, "DRAW");
+  }
+  // ── ERASE ──
+  else if (gesture === "ERASE") {
+    drawing = false;
+    trailBuffer = [];
+    eraseAt(rawX, rawY);
+    drawCursor(rawX, rawY, "ERASE");
+  }
+  // ── COLOR (pinch) ──
+  else if (gesture === "COLOR") {
+    drawing = false;
+    trailBuffer = [];
+    const thumbX = (1 - lm[4].x) * drawCanvas.width;
+    const thumbY = lm[4].y * drawCanvas.height;
+    const midX = (thumbX + rawX) / 2;
+    const midY = (thumbY + rawY) / 2;
+    drawCursor(midX, midY, "COLOR");
+
+    const nowMs = Date.now();
+    if (nowMs - lastColorChange > 600) {
+      colorIdx = (colorIdx + 1) % COLORS.length;
+      updateSwatches();
+      lastColorChange = nowMs;
+      // Flash swatch
+      document.querySelectorAll(".swatch")[colorIdx].style.transform = "scale(1.5)";
+      setTimeout(() => updateSwatches(), 200);
+    }
+  }
+  // ── SIZE ──
+  else if (gesture === "SIZE") {
+    drawing = false;
+    trailBuffer = [];
+    const spread = fingerSpread3(lm);
+    brushSize = Math.max(4, Math.min(40, Math.round(spread * 180)));
+    updateSizePreview();
+    drawCursor(rawX, rawY, "SIZE");
+  }
+  // ── CLEAR (hold) ──
+  else if (gesture === "CLEAR") {
+    drawing = false;
+    trailBuffer = [];
+    if (!clearHoldStart) clearHoldStart = Date.now();
+    const elapsed = Date.now() - clearHoldStart;
+    const progress = Math.min(elapsed / 2000, 1);
+    updateHoldRing(progress);
+    const palmX = (1 - lm[0].x) * drawCanvas.width;
+    const palmY = lm[0].y * drawCanvas.height;
+    drawCursor(palmX, palmY, "CLEAR");
+    if (progress >= 1) {
+      clearCanvas();
+      clearHoldStart = null;
+      updateHoldRing(0);
+    }
+  }
+  // ── LIFT (fist / other) ──
+  else {
+    drawing = false;
+    trailBuffer = [];
+    clearHoldStart = null;
+    updateHoldRing(0);
+    const palmX = (1 - lm[0].x) * drawCanvas.width;
+    const palmY = lm[0].y * drawCanvas.height;
+    drawCursor(palmX, palmY, "LIFT");
+  }
+
+  // Reset clear hold if not CLEAR gesture
+  if (gesture !== "CLEAR") {
+    clearHoldStart = null;
+    updateHoldRing(0);
+  }
+}
+
+// ── App start ─────────────────────────────────────────────────────────────────
+function startApp() {
+  document.getElementById("start-overlay").classList.add("hidden");
+
+  const video = document.getElementById("video");
+
+  const hands = new Hands({
+    locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  hands.setOptions({
+    maxNumHands:        1,
+    modelComplexity:    1,
+    minDetectionConfidence:  0.75,
+    minTrackingConfidence:   0.65,
+  });
+
+  hands.onResults(onResults);
+
+  const camera = new Camera(video, {
+    onFrame: async () => { await hands.send({ image: video }); },
+    width:  640,
+    height: 480,
+  });
+
+  camera.start().catch(() => {
+    alert("Camera access denied. Please allow camera permissions and refresh.");
+  });
+}
+
+// ── Swatch click ──────────────────────────────────────────────────────────────
+document.querySelectorAll(".swatch").forEach((s, i) => {
+  s.addEventListener("click", () => {
+    colorIdx = i;
+    updateSwatches();
+  });
+});
+
+// ── Draw subtle grid on canvas ────────────────────────────────────────────────
+function drawGrid() {
+  dctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  dctx.strokeStyle = "rgba(255,255,255,0.025)";
+  dctx.lineWidth = 1;
+  const step = 48;
+  for (let x=0; x<drawCanvas.width; x+=step) {
+    dctx.beginPath(); dctx.moveTo(x,0); dctx.lineTo(x,drawCanvas.height); dctx.stroke();
+  }
+  for (let y=0; y<drawCanvas.height; y+=step) {
+    dctx.beginPath(); dctx.moveTo(0,y); dctx.lineTo(drawCanvas.width,y); dctx.stroke();
+  }
+}
+drawGrid();
+window.addEventListener("resize", () => { resizeCanvases(); drawGrid(); });
+
+updateSwatches();
+</script>
+</body>
+</html>
