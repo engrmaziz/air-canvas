@@ -161,7 +161,7 @@ npx serve .
 
 ### Option 3 — Deploy to GitHub Pages / Netlify / Vercel
 
-Just push the repo to GitHub and enable **GitHub Pages** from the repository settings — the app will be live at `https://<username>.github.io/air-canvas/`.
+The app will is live at `https://engrmaziz.github.io/air-canvas/`.
 
 ---
 
